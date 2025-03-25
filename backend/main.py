@@ -531,6 +531,11 @@ async def chat_stream(
                 if user_messages:
                     message = user_messages[-1]["content"]
                     print(f"GET请求使用会话 {conversation_id} 的最后一条用户消息: '{message}'")
+                    print(f"聊天历史包含 {len(chat_history)} 条消息")
+                else:
+                    print(f"警告: 会话 {conversation_id} 没有用户消息")
+            else:
+                print(f"警告: 未找到会话 {conversation_id} 或会话为空")
         elif request:
             message = request.message
             
@@ -559,51 +564,51 @@ async def chat_stream(
         
         # 创建一个异步生成器来流式传输聊天响应
         async def event_generator():
+            # 在生成器内部声明非局部变量，确保可以访问外部作用域的变量
+            nonlocal message, chat_history, conversation_id
+            
             try:
                 if not message:
                     # 如果没有消息，发送简单提示
                     yield {
                         "event": "message",
-                        "data": json.dumps({"token": "请"})
+                        "data": "请"
                     }
                     await asyncio.sleep(0.05)
                     yield {
                         "event": "message",
-                        "data": json.dumps({"token": "输"})
+                        "data": "输"
                     }
                     await asyncio.sleep(0.05)
                     yield {
                         "event": "message",
-                        "data": json.dumps({"token": "入"})
+                        "data": "入"
                     }
                     await asyncio.sleep(0.05)
                     yield {
                         "event": "message",
-                        "data": json.dumps({"token": "您"})
+                        "data": "您"
                     }
                     await asyncio.sleep(0.05)
                     yield {
                         "event": "message",
-                        "data": json.dumps({"token": "的"})
+                        "data": "的"
                     }
                     await asyncio.sleep(0.05)
                     yield {
                         "event": "message",
-                        "data": json.dumps({"token": "问"})
+                        "data": "问"
                     }
                     await asyncio.sleep(0.05)
                     yield {
                         "event": "message",
-                        "data": json.dumps({"token": "题"})
+                        "data": "题"
                     }
                     
                     # 发送完成事件
                     yield {
                         "event": "done",
-                        "data": json.dumps({
-                            "message": "Stream completed",
-                            "conversation_id": conversation_id
-                        })
+                        "data": json.dumps({"message": "Stream completed", "conversation_id": conversation_id})
                     }
                     return
                 
@@ -623,17 +628,14 @@ async def chat_stream(
                     for char in fallback_response:
                         yield {
                             "event": "message",
-                            "data": json.dumps({"token": char})
+                            "data": char
                         }
                         await asyncio.sleep(0.01)
                     
                     # 发送完成事件
                     yield {
                         "event": "done",
-                        "data": json.dumps({
-                            "message": "Stream completed with fallback",
-                            "conversation_id": conversation_id
-                        })
+                        "data": json.dumps({"message": "Stream completed with fallback", "conversation_id": conversation_id})
                     }
                     
                     # 更新会话记录（如果是POST请求）
@@ -683,12 +685,11 @@ async def chat_stream(
                 print(f"开始发送流式响应字符...")
                 char_count = 0
                 for char in full_response:
-                    # 确保正确的SSE格式
-                    event_data = {
+                    # 直接发送字符，不包装在JSON对象中
+                    yield {
                         "event": "message",
-                        "data": json.dumps({"token": char})
+                        "data": char
                     }
-                    yield event_data
                     char_count += 1
                     # 每100个字符打印一次状态
                     if char_count % 100 == 0:
@@ -707,16 +708,16 @@ async def chat_stream(
                         "timestamp": datetime.now().isoformat()
                     })
                 
-                # 发送完成事件
-                done_event = {
-                    "event": "done",
-                    "data": json.dumps({
-                        "message": "Stream completed",
-                        "conversation_id": conversation_id
-                    })
+                # 发送完成事件，包含会话ID
+                completion_data = {
+                    "message": "Stream completed", 
+                    "conversation_id": conversation_id
                 }
-                print(f"发送完成事件: {done_event}")
-                yield done_event
+                yield {
+                    "event": "done",
+                    "data": json.dumps(completion_data)
+                }
+                print(f"发送完成事件: {completion_data}")
                 
             except Exception as e:
                 error_msg = f"流式响应错误: {str(e)}"

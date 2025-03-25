@@ -14,7 +14,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = () => {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [conversationId, setConversationId] = useState<string | undefined>(undefined);
+  const [useStreamResponse, setUseStreamResponse] = useState<boolean>(true);
+  const [currentStreamContent, setCurrentStreamContent] = useState<string>('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const cleanupRef = useRef<(() => void) | null>(null);
 
   // 自动滚动到底部
   useEffect(() => {
@@ -106,8 +109,18 @@ const ChatInterface: React.FC<ChatInterfaceProps> = () => {
   const handleSendMessage = async () => {
     if (!input.trim() || isLoading) return;
     
-    console.log(`发送消息: "${input}"`);
+    console.log(`发送消息: "${input}", 使用流式响应: ${useStreamResponse}`);
     setIsLoading(true);
+    
+    // 重置流式内容
+    setCurrentStreamContent('');
+    
+    // 清除之前的清理函数
+    if (cleanupRef.current) {
+      console.log('清理上一个流式连接');
+      cleanupRef.current();
+      cleanupRef.current = null;
+    }
     
     // 添加用户消息到聊天列表
     const userMessage: Message = {
@@ -116,21 +129,77 @@ const ChatInterface: React.FC<ChatInterfaceProps> = () => {
       timestamp: new Date().toISOString()
     };
     
-    // 更新消息列表
-    setMessages(prevMessages => [...prevMessages, userMessage]);
+    // 更新消息列表，使用函数式更新确保获取最新状态
+    setMessages(currentMessages => [...currentMessages, userMessage]);
+    
     const messageToSend = input.trim();
     setInput('');
     
     try {
-      // 准备消息历史
-      const chatHistory = messages.map(msg => ({
+      // 准备消息历史 - 获取最新的消息列表
+      const chatHistory = messages.concat(userMessage).map(msg => ({
         role: msg.role,
         content: msg.content,
         timestamp: msg.timestamp
       }));
       
-      // 使用普通消息发送函数，传递聊天历史
-      const response = await sendMessage(messageToSend, conversationId, chatHistory);
+      console.log('准备发送请求，参数:', { 
+        message: messageToSend, 
+        conversationId, 
+        chatHistoryLength: chatHistory.length,
+        useStreamResponse
+      });
+      
+      // 如果使用流式响应，添加一个空的助手消息用于实时更新
+      let assistantMessageIndex = -1;
+      if (useStreamResponse) {
+        const tempAssistantMessage: Message = {
+          role: 'assistant',
+          content: '',
+          timestamp: new Date().toISOString()
+        };
+        
+        // 使用函数式更新来确保获取最新状态
+        setMessages(currentMessages => {
+          const updatedMessages = [...currentMessages, tempAssistantMessage];
+          assistantMessageIndex = updatedMessages.length - 1; // 新消息的索引
+          return updatedMessages;
+        });
+        
+        // 等待状态更新完成
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+      
+      // 使用消息发送函数，传递聊天历史、流式响应参数和token回调
+      const response = await sendMessage(
+        messageToSend, 
+        conversationId, 
+        chatHistory,
+        useStreamResponse,
+        // 添加token接收回调，用于实时更新UI
+        useStreamResponse ? (token: string) => {
+          
+          // 更新当前流式内容
+          setCurrentStreamContent(prev => {
+            const newContent = prev + token;
+            
+            // 更新消息列表中的助手回复
+            setMessages(currentMessages => {
+              if (assistantMessageIndex >= 0 && assistantMessageIndex < currentMessages.length) {
+                const updatedMessages = [...currentMessages];
+                updatedMessages[assistantMessageIndex] = {
+                  ...updatedMessages[assistantMessageIndex],
+                  content: newContent
+                };
+                return updatedMessages;
+              }
+              return currentMessages;
+            });
+            
+            return newContent;
+          });
+        } : undefined
+      );
       
       console.log('收到回复:', response);
       
@@ -140,28 +209,35 @@ const ChatInterface: React.FC<ChatInterfaceProps> = () => {
         console.log(`设置新会话ID: ${response.conversationId}`);
       }
       
-      // 将助手回复添加到消息列表
-      const assistantMessage: Message = {
-        role: 'assistant',
-        content: response.content,
-        timestamp: new Date().toISOString()
-      };
+      // 如果不是使用流式响应，添加助手回复到消息列表
+      if (!useStreamResponse) {
+        const assistantMessage: Message = {
+          role: 'assistant',
+          content: response.content,
+          timestamp: new Date().toISOString()
+        };
+        
+        setMessages(currentMessages => [...currentMessages, assistantMessage]);
+      }
       
-      setMessages(prev => [...prev, assistantMessage]);
       setIsLoading(false);
       
-    } catch (error) {
+    } catch (error: any) {
       console.error('发送消息时出错:', error);
       setIsLoading(false);
       
-      // 添加错误消息
+      // 添加详细的错误消息
+      const errorContent = `很抱歉，服务暂时出现问题: ${error.message || '未知错误'}
+
+如果您需要紧急医疗帮助，请立即联系您的医生或拨打急救电话。`;
+      
       const errorMessage: Message = {
         role: 'system',
-        content: `很抱歉，服务暂时出现问题，请稍后再试。如果您需要紧急医疗帮助，请立即联系您的医生或拨打急救电话。`,
+        content: errorContent,
         timestamp: new Date().toISOString()
       };
       
-      setMessages(prev => [...prev, errorMessage]);
+      setMessages(currentMessages => [...currentMessages, errorMessage]);
     }
   };
 
@@ -181,13 +257,22 @@ const ChatInterface: React.FC<ChatInterfaceProps> = () => {
 
   return (
     <div className="chat-container">
-      {/* 只保留一个头部 */}
-      {/* <div className="chat-header">
-        <h1>AI医疗助手</h1>
-        {conversationId && (
-          <div className="conversation-id">会话ID: {conversationId.substring(0, 8)}...</div>
-        )}
-      </div> */}
+      <div className="header">
+        <div className="title">AI医疗助手</div>
+        <div className="actions">
+          {/* <div className="stream-toggle">
+            <label className="toggle-label">
+              <input 
+                type="checkbox" 
+                checked={useStreamResponse}
+                onChange={(e) => setUseStreamResponse(e.target.checked)}
+                disabled={isLoading}
+              />
+              <span>使用流式响应</span>
+            </label>
+          </div> */}
+        </div>
+      </div>
       
       <div className="messages-container">
         {/* 显示之前的消息 */}
@@ -211,11 +296,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = () => {
         {/* 显示加载状态 */}
         {isLoading && (
           <div className="message assistant">
-            <div className="message-bubble">
+            {/* <div className="message-bubble">
               <div className="typing-indicator">
                 <span></span>
               </div>
-            </div>
+            </div> */}
             <div className="message-info">
               AI医疗助手 · 正在思考...
             </div>
