@@ -2,7 +2,15 @@
 
 基于React + FastAPI + LangChain + 通义千问的智能医疗问答系统，支持基于检索增强生成(RAG)的医疗知识问答。
 
-![AI医疗助手](https://i.imgur.com/XOaO7FL.png)
+
+正常提问
+
+![AI医疗助手](/frontend/public/nomal.png)
+
+经过RAG处理提问
+
+![AI医疗助手](/frontend/public/ragResult.png)
+
 
 ## 项目简介
 
