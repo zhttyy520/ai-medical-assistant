@@ -1,0 +1,137 @@
+/* 基础布局样式 */
+
+.App {
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background-color: #f8fbfd;
+}
+
+
+/* 头部样式 */
+
+.App-header {
+    background-color: #1e88e5;
+    background-image: linear-gradient(135deg, #1e88e5 0%, #0d47a1 100%);
+    min-height: 80px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    padding: 12px 20px;
+    position: relative;
+}
+
+.App-header::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 4px;
+    background: linear-gradient(90deg, #29b6f6, #4fc3f7, #81d4fa);
+}
+
+.logo-container {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.logo-icon {
+    font-size: 28px;
+}
+
+.App-header h1 {
+    margin: 0;
+    font-size: 1.8rem;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+}
+
+.header-subtitle {
+    font-size: 0.9rem;
+    opacity: 0.9;
+    margin-top: 4px;
+    font-weight: 400;
+}
+
+
+/* 主体内容样式 */
+
+main {
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+    max-width: 1100px;
+    width: 100%;
+    margin: 0 auto;
+    padding: 0;
+    position: relative;
+}
+
+main>div {
+    flex-grow: 1;
+    height: 100%;
+    border-radius: 12px;
+    margin: 15px;
+    overflow: hidden;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
+    background-color: white;
+    border: 1px solid #e0e6ed;
+}
+
+
+/* 底部样式 */
+
+.App-footer {
+    background-color: #f1f5f9;
+    color: #64748b;
+    font-size: 0.8rem;
+    padding: 12px;
+    text-align: center;
+    border-top: 1px solid #e2e8f0;
+}
+
+
+/* 响应式设计 */
+
+@media (max-width: 768px) {
+    .App-header {
+        padding: 10px;
+        min-height: 60px;
+    }
+    .App-header h1 {
+        font-size: 1.4rem;
+    }
+    .logo-icon {
+        font-size: 24px;
+    }
+    main>div {
+        margin: 8px;
+        border-radius: 8px;
+    }
+    .header-subtitle {
+        font-size: 0.8rem;
+    }
+}
+
+@media (max-width: 480px) {
+    .App-header h1 {
+        font-size: 1.2rem;
+    }
+    .logo-icon {
+        font-size: 20px;
+    }
+    main>div {
+        margin: 4px;
+        border-radius: 6px;
+    }
+    .header-subtitle {
+        display: none;
+    }
+}

@@ -1,0 +1,93 @@
+body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    background-color: #f8fbfd;
+    color: #0a2642;
+}
+
+code {
+    font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New', monospace;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+
+/* 移动设备优化 */
+
+html,
+body {
+    height: 100%;
+    overflow: hidden;
+    position: relative;
+}
+
+#root {
+    height: 100%;
+}
+
+
+/* 统一的强调色 */
+
+:root {
+    --primary-color: #1e88e5;
+    /* 主颜色 */
+    --primary-dark: #0d47a1;
+    /* 深色版本 */
+    --primary-light: #4dabf7;
+    /* 浅色版本 */
+    --accent-color: #00c853;
+    /* 辅助色彩 */
+    --warning-color: #ffc107;
+    /* 警告色彩 */
+    --error-color: #f44336;
+    /* 错误色彩 */
+    --text-primary: #0a2642;
+    /* 文本主色 */
+    --text-secondary: #64748b;
+    /* 次要文本 */
+    --background-color: #f8fbfd;
+    /* 背景色 */
+    --card-color: #ffffff;
+    /* 卡片背景 */
+}
+
+
+/* 统一按钮样式 */
+
+button {
+    font-family: inherit;
+    font-size: 15px;
+}
+
+
+/* 链接样式 */
+
+a {
+    color: var(--primary-color);
+    text-decoration: none;
+    transition: color 0.2s ease;
+}
+
+a:hover {
+    color: var(--primary-dark);
+    text-decoration: underline;
+}
+
+
+/* 平滑滚动 */
+
+html {
+    scroll-behavior: smooth;
+}
+
+
+/* 文本选择样式 */
+
+::selection {
+    background-color: rgba(77, 171, 247, 0.3);
+    color: #0a2642;
+}

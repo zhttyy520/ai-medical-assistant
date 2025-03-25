@@ -1,0 +1,80 @@
+# 后端 Python 相关
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 虚拟环境
+backend/venv/
+backend/env/
+backend/ENV/
+venv/
+env/
+ENV/
+
+# 敏感信息
+backend/.env
+*.env.local
+*.env.development
+*.env.test
+*.env.production
+
+# 日志和数据库
+*.log
+logs/
+*.db
+*.sqlite3
+*.sqlite
+
+# 向量存储和缓存
+.chroma/
+.vector_store/
+
+# 前端依赖
+frontend/node_modules/
+node_modules/
+
+# 前端构建输出
+frontend/build/
+frontend/dist/
+frontend/.next/
+frontend/out/
+frontend/.nuxt/
+frontend/.vuepress/dist
+frontend/.serverless/
+frontend/.fusebox/
+frontend/.dynamodb/
+
+# 前端缓存
+frontend/.npm
+frontend/.eslintcache
+frontend/.DS_Store
+frontend/coverage
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
+
+# IDE 和编辑器文件
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db 
