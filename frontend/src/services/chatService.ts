@@ -5,6 +5,8 @@ export interface Message {
   role: string;
   content: string;
   timestamp?: string;
+  image_url?: string;  // 添加图片URL字段
+  isTemporary?: boolean; // 标记是否为临时消息
 }
 
 // API基础URL
@@ -14,6 +16,13 @@ const API_BASE_URL = 'http://localhost:8000/api';
 export interface ChatRequest {
   message: string;
   chat_history?: any[];
+}
+
+// 定义多模态请求类型
+export interface MultiModalChatRequest {
+  message: string;
+  chat_history?: any[];
+  image_data?: string;  // Base64编码的图片数据
 }
 
 // 发送普通消息（非流式）
@@ -59,6 +68,137 @@ export async function sendMessage(
     };
   } catch (error) {
     console.error(`发送消息失败:`, error);
+    throw error;
+  }
+}
+
+// 使用表单发送多模态消息（图片+文本）
+export async function sendMultiModalMessage(
+  message: string,
+  imageFile: File,
+  conversationId?: string,
+  chatHistory?: any[]
+) {
+  try {
+    console.log(`发送多模态消息: '${message}', 图片: ${imageFile.name}, conversationId: ${conversationId || '新会话'}, 历史消息数: ${chatHistory?.length || 0}`);
+    
+    // 构建FormData
+    const formData = new FormData();
+    formData.append('message', message);
+    formData.append('file', imageFile);
+    
+    // 如果有会话ID，添加到URL参数
+    let url = `${API_BASE_URL}/chat/multimodal`;
+    if (conversationId) {
+      url += `?conversation_id=${conversationId}`;
+    }
+    
+    console.log(`发送多模态请求到: ${url}`);
+    
+    // 发送请求
+    const response = await axios.post(url, formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      }
+    });
+    
+    console.log('多模态响应:', response.data);
+    
+    return {
+      content: response.data.response,
+      conversationId: response.data.conversation_id
+    };
+  } catch (error) {
+    console.error(`发送多模态消息失败:`, error);
+    throw error;
+  }
+}
+
+// 使用JSON发送多模态消息（Base64图片+文本）
+export async function sendMultiModalJsonMessage(
+  message: string,
+  imageData: string,
+  conversationId?: string,
+  chatHistory?: any[]
+) {
+  try {
+    console.log(`发送多模态JSON消息: '${message}', 图片数据长度: ${imageData.length}, conversationId: ${conversationId || '新会话'}, 历史消息数: ${chatHistory?.length || 0}`);
+    
+    // 确保图片 base64 数据格式正确
+    let processedImageData = imageData;
+    if (imageData.startsWith('data:')) {
+      // 已经是正确格式，保持不变
+      console.log('图片数据已包含 data URI 前缀');
+    } else {
+      // 添加 data URI 前缀
+      processedImageData = `data:image/jpeg;base64,${imageData}`;
+      console.log('已添加 data URI 前缀到图片数据');
+    }
+    
+    // 确保聊天历史中每个消息对象都有role和content字段
+    const sanitizedChatHistory = chatHistory ? chatHistory.map(msg => {
+      // 确保消息有必要的字段
+      if (typeof msg === 'object' && msg !== null) {
+        return {
+          role: msg.role || 'user',
+          content: msg.content || '',
+          timestamp: msg.timestamp || new Date().toISOString()
+        };
+      }
+      // 跳过无效消息
+      console.warn('跳过无效历史消息', msg);
+      return null;
+    }).filter(Boolean) : [];
+    
+    // 构建请求对象
+    const request: MultiModalChatRequest = {
+      message,
+      chat_history: sanitizedChatHistory,
+      image_data: processedImageData
+    };
+    
+    // 如果有会话ID，添加到URL参数
+    let url = `${API_BASE_URL}/chat/multimodal-json`;
+    if (conversationId) {
+      url += `?conversation_id=${conversationId}`;
+    }
+    
+    console.log(`发送多模态JSON请求到: ${url}`);
+    console.log(`请求历史消息数: ${sanitizedChatHistory.length}`);
+    
+    // 发送请求
+    const response = await axios.post(url, request, {
+      headers: {
+        'Content-Type': 'application/json',
+      }
+    });
+    
+    console.log('多模态JSON响应:', response.data);
+    
+    // 确保响应内容是字符串
+    let content = '';
+    if (response.data && response.data.response) {
+      if (typeof response.data.response === 'string') {
+        content = response.data.response;
+      } else {
+        // 如果响应不是字符串，尝试转换
+        try {
+          content = JSON.stringify(response.data.response);
+        } catch (err) {
+          console.error('响应内容转换失败:', err);
+          content = '收到响应，但格式无法处理。';
+        }
+      }
+    } else {
+      content = '未收到有效响应。';
+    }
+    
+    return {
+      content: content,
+      conversationId: response.data.conversation_id || conversationId
+    };
+  } catch (error) {
+    console.error(`发送多模态JSON消息失败:`, error);
     throw error;
   }
 }

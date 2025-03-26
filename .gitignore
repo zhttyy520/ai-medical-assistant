@@ -41,6 +41,7 @@ logs/
 *.db
 *.sqlite3
 *.sqlite
+uploads/
 
 # 向量存储和缓存
 .chroma/

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, Depends, status
+from fastapi import FastAPI, Request, Depends, status, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from sse_starlette.sse import EventSourceResponse
 from fastapi.responses import JSONResponse
@@ -6,7 +6,14 @@ from pydantic import BaseModel
 import os
 import json
 import asyncio
-from typing import List, Dict, Any, Optional
+import uuid
+import base64
+from PIL import Image
+import io
+import aiofiles
+import numpy as np
+import requests
+from typing import List, Dict, Any, Optional, Union
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -25,13 +32,14 @@ load_dotenv()
 
 # 获取DashScope API Key
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
-if not DASHSCOPE_API_KEY:
-    print("警告: 环境变量中未找到DASHSCOPE_API_KEY，尝试使用硬编码值")
-    DASHSCOPE_API_KEY = "your_dashscope_api_key_here"  
-    
 # 设置API密钥
 os.environ["DASHSCOPE_API_KEY"] = DASHSCOPE_API_KEY
 print(f"使用DashScope API Key: {DASHSCOPE_API_KEY[:8]}...（已隐藏部分）")
+
+# 创建图片存储目录
+UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+print(f"图片上传目录: {UPLOAD_DIR}")
 
 try:
     embeddings = DashScopeEmbeddings(
@@ -59,10 +67,16 @@ class Message(BaseModel):
     role: str
     content: str
     timestamp: Optional[str] = None
+    image_url: Optional[str] = None  # 添加图片URL字段
 
 class ChatRequest(BaseModel):
     message: str
     chat_history: Optional[List[Message]] = []
+
+class MultiModalRequest(BaseModel):
+    message: str
+    chat_history: Optional[List[Message]] = []
+    image_data: Optional[str] = None  # Base64编码的图片数据
 
 class StreamingCallbackHandler:
     """用于处理流式回调的处理器"""
@@ -222,7 +236,8 @@ general_prompt = ChatPromptTemplate.from_template(DEFAULT_TEMPLATE)
 rag_prompt = ChatPromptTemplate.from_template(RAG_TEMPLATE)
 
 # 初始化智能问答组件
-vectorstore = initialize_rag()
+# vectorstore = initialize_rag()
+vectorstore = None
 if vectorstore:
     retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
 else:
@@ -765,6 +780,387 @@ async def get_history(conversation_id: str):
         "history": conversation_store[conversation_id]["messages"],
         "conversation_id": conversation_id
     }
+
+# 保存上传的图片
+async def save_uploaded_file(file: UploadFile) -> str:
+    # 生成唯一文件名
+    file_ext = os.path.splitext(file.filename)[1] if file.filename else ".jpg"
+    file_name = f"{uuid.uuid4()}{file_ext}"
+    file_path = os.path.join(UPLOAD_DIR, file_name)
+    
+    # 保存文件
+    async with aiofiles.open(file_path, 'wb') as out_file:
+        # 读取并写入文件内容
+        content = await file.read()
+        await out_file.write(content)
+    
+    return file_path
+
+# 使用DashScope API进行多模态请求
+async def call_dashscope_multimodal(text: str, image_path: str, history: List[Dict[str, str]] = None) -> str:
+    try:
+        print(f"开始处理多模态请求 - 文本: '{text}', 图片: '{image_path}'")
+        
+        # 直接使用 DashScope API 而不通过 LangChain
+        import dashscope
+        from dashscope import MultiModalConversation
+        
+        # 读取图片为base64
+        with open(image_path, "rb") as img_file:
+            image_content = base64.b64encode(img_file.read()).decode('utf-8')
+        
+        # 添加系统消息
+        system_message = {
+            "role": "system",
+            "content": [
+                {
+                    "text": """你是一位专业的医疗助手，擅长分析医学图像和回答医疗健康相关问题。
+请用简洁专业的语言回答问题，使用Markdown格式美化回复，对于医学专业术语进行解释。
+重要：请确保你只回答用户当前的问题，而不是之前的问题。
+请分析用户提供的图像，并根据图像内容和用户的问题提供专业的医疗建议。"""
+                }
+            ]
+        }
+        
+        # 转换历史消息格式
+        formatted_history = []
+        if history and len(history) > 0:
+            print(f"添加{len(history)}条历史消息")
+            for msg in history:
+                if msg["role"] == "user":
+                    formatted_history.append({
+                        "role": "user",
+                        "content": [{"text": msg["content"]}]
+                    })
+                elif msg["role"] == "assistant":
+                    formatted_history.append({
+                        "role": "assistant",
+                        "content": [{"text": msg["content"]}]
+                    })
+        
+        # 构建当前请求的多模态消息
+        current_message = {
+            "role": "user",
+            "content": [
+                {
+                    "text": text
+                },
+                {
+                    "image": f"data:image/jpeg;base64,{image_content}"
+                }
+            ]
+        }
+        
+        # 如果有历史消息，添加当前消息到历史
+        messages = [system_message] + formatted_history + [current_message]
+        
+        print(f"准备的消息数量: {len(messages)}")
+        
+        # 设置API密钥
+        dashscope.api_key = DASHSCOPE_API_KEY
+        
+        # 调用多模态模型
+        response = MultiModalConversation.call(
+            model='qwen-vl-plus',
+            messages=messages,
+            stream=False,
+            result_format='message',  # 使用消息格式
+            temperature=0.7,
+            max_tokens=1000,
+        )
+        
+        print(f"API调用状态码: {response.status_code}")
+        print(f"API调用请求ID: {response.request_id}")
+        
+        # 检查响应
+        if response.status_code == 200:
+            # 提取文本内容
+            response_message = response.output.choices[0].message
+            print(f"响应角色: {response_message.role}")
+            
+            # 检查内容类型
+            if isinstance(response_message.content, list):
+                # 从多模态响应中提取文本
+                text_parts = []
+                for content_item in response_message.content:
+                    if isinstance(content_item, dict) and 'text' in content_item:
+                        text_parts.append(content_item['text'])
+                response_text = "".join(text_parts)
+            else:
+                # 如果是字符串或其他类型
+                response_text = str(response_message.content)
+            
+            print(f"多模态模型返回的响应: '{response_text[:100]}...' (长度: {len(response_text)})")
+            return response_text
+        else:
+            error_msg = f"API调用失败: {response.status_code}, {response.message}"
+            print(error_msg)
+            return f"处理图片时出错: {error_msg}"
+    
+    except Exception as e:
+        error_msg = f"调用多模态API出错: {str(e)}"
+        print(error_msg)
+        import traceback
+        traceback.print_exc()
+        return f"处理图片时出错: {str(e)}"
+
+# 新增的多模态聊天API端点（上传表单版本）
+@app.post("/api/chat/multimodal")
+async def chat_multimodal(
+    message: str = Form(...),
+    file: UploadFile = File(...),
+    conversation_id: str = Depends(get_conversation_id)
+):
+    try:
+        print(f"收到多模态表单请求 - 文本: '{message}', 图片: {file.filename}, 会话ID: {conversation_id}")
+        
+        # 保存上传的图片
+        file_path = await save_uploaded_file(file)
+        print(f"图片已保存到: {file_path}")
+        
+        # 获取历史消息
+        history = []
+        if conversation_id in conversation_store:
+            # 获取最近的对话历史（最多10条）
+            history = conversation_store[conversation_id]["messages"][-10:]
+            print(f"获取到会话历史, 共{len(history)}条消息")
+        
+        # 转换为模型可用的格式
+        model_history = []
+        for msg in history:
+            if msg["role"] in ["user", "assistant"]:
+                # 只添加文本消息到历史记录，不添加图片
+                model_history.append({
+                    "role": msg["role"],
+                    "content": msg["content"]
+                })
+        
+        print(f"准备调用多模态模型, 文本: '{message}', 历史消息: {len(model_history)}条")
+        
+        # 调用多模态模型
+        response_text = await call_dashscope_multimodal(message, file_path, model_history)
+        print(f"多模态响应: '{response_text[:100]}...' (长度: {len(response_text)})")
+        
+        # 记录消息到会话历史
+        current_time = datetime.now().isoformat()
+        
+        # 记录用户消息（带图片）
+        user_message = {
+            "role": "user",
+            "content": message,
+            "timestamp": current_time,
+            "image_url": file_path  # 存储图片路径
+        }
+        conversation_store[conversation_id]["messages"].append(user_message)
+        
+        # 记录助手响应
+        assistant_message = {
+            "role": "assistant",
+            "content": response_text,
+            "timestamp": datetime.now().isoformat()
+        }
+        conversation_store[conversation_id]["messages"].append(assistant_message)
+        
+        return {
+            "response": response_text,
+            "conversation_id": conversation_id
+        }
+    
+    except Exception as e:
+        print(f"多模态聊天错误: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": str(e)}
+        )
+
+# 新增的多模态聊天API端点（JSON版本，接受base64图片数据）
+@app.post("/api/chat/multimodal-json")
+async def chat_multimodal_json(
+    request: MultiModalRequest,
+    conversation_id: str = Depends(get_conversation_id)
+):
+    try:
+        print(f"收到多模态JSON请求 - 文本: '{request.message}', 会话ID: {conversation_id}")
+        
+        if not request.image_data:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={"error": "未提供图片数据"}
+            )
+        
+        # 解码并保存base64图片
+        try:
+            # 处理 data URI 前缀
+            base64_data = request.image_data
+            
+            # 如果包含 data URI 格式，提取 base64 部分
+            if ';base64,' in base64_data:
+                base64_data = base64_data.split(';base64,')[1]
+            elif ',' in base64_data:  # 简单格式 data:,base64数据
+                base64_data = base64_data.split(',')[1]
+                
+            # 解码 base64 数据
+            try:
+                image_bytes = base64.b64decode(base64_data)
+            except Exception as decode_err:
+                print(f"Base64解码失败: {str(decode_err)}")
+                return JSONResponse(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    content={"error": f"Base64解码失败: {str(decode_err)}"}
+                )
+            
+            # 验证解码后的数据是否为有效的图像
+            try:
+                from PIL import Image
+                image = Image.open(io.BytesIO(image_bytes))
+                image_format = image.format.lower() if image.format else "jpeg"
+                print(f"图片格式: {image_format}, 尺寸: {image.size}")
+            except Exception as img_err:
+                print(f"图片无效: {str(img_err)}")
+                return JSONResponse(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    content={"error": f"提供的数据不是有效的图片: {str(img_err)}"}
+                )
+            
+            # 生成唯一文件名并保存图片
+            file_name = f"{uuid.uuid4()}.{image_format}"
+            file_path = os.path.join(UPLOAD_DIR, file_name)
+            
+            # 保存图片
+            with open(file_path, 'wb') as f:
+                f.write(image_bytes)
+                
+            print(f"Base64图片已保存到: {file_path}")
+        except Exception as e:
+            print(f"保存base64图片失败: {str(e)}")
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={"error": f"图片处理失败: {str(e)}"}
+            )
+        
+        # 处理聊天历史
+        chat_history = []
+        if request.chat_history:
+            # 安全地转换Message对象为字典
+            for msg in request.chat_history:
+                try:
+                    # 如果msg已经是字典
+                    if isinstance(msg, dict):
+                        # 确保有role和content字段
+                        if "role" in msg and "content" in msg:
+                            chat_history.append(msg)
+                        else:
+                            print(f"警告: 消息缺少必要字段 {msg}")
+                    # 如果msg是Pydantic模型
+                    elif hasattr(msg, "role") and hasattr(msg, "content"):
+                        chat_history.append({
+                            "role": msg.role,
+                            "content": msg.content,
+                            "timestamp": msg.timestamp if hasattr(msg, "timestamp") else datetime.now().isoformat()
+                        })
+                    else:
+                        print(f"警告: 无法识别的消息类型 {type(msg)}")
+                except Exception as msg_error:
+                    print(f"处理消息时出错: {str(msg_error)}")
+                    # 继续处理下一条消息
+        
+        # 如果请求的历史为空，获取服务器存储的历史
+        if not chat_history and conversation_id in conversation_store:
+            chat_history = conversation_store[conversation_id]["messages"][-10:]
+            print(f"使用服务器存储的历史记录, 共{len(chat_history)}条消息")
+        
+        # 转换为模型可用的格式
+        model_history = []
+        for msg in chat_history:
+            try:
+                if isinstance(msg, dict) and "role" in msg and "content" in msg:
+                    if msg["role"] in ["user", "assistant"]:
+                        # 只添加文本消息到历史记录，不添加图片
+                        model_history.append({
+                            "role": msg["role"],
+                            "content": msg["content"]
+                        })
+                else:
+                    print(f"跳过不符合格式的消息: {msg}")
+            except Exception as e:
+                print(f"处理历史消息时出错: {str(e)}")
+        
+        print(f"准备调用多模态模型, 文本: '{request.message}', 历史消息: {len(model_history)}条")
+        
+        # 调用多模态模型 - 使用当前的请求消息
+        response_text = await call_dashscope_multimodal(request.message, file_path, model_history)
+        
+        # 确保响应是字符串格式
+        if not isinstance(response_text, str):
+            print(f"警告: 响应不是字符串类型, 而是 {type(response_text)}")
+            if response_text is None:
+                response_text = "图像处理完成，但未能生成回复。"
+            else:
+                try:
+                    # 尝试将非字符串响应转换为字符串
+                    if isinstance(response_text, dict):
+                        if 'content' in response_text:
+                            response_text = str(response_text['content'])
+                        elif 'text' in response_text:
+                            response_text = str(response_text['text'])
+                        else:
+                            response_text = json.dumps(response_text, ensure_ascii=False)
+                    elif isinstance(response_text, list):
+                        # 尝试提取列表中的文本内容
+                        text_items = []
+                        for item in response_text:
+                            if isinstance(item, str):
+                                text_items.append(item)
+                            elif isinstance(item, dict) and 'text' in item:
+                                text_items.append(str(item['text']))
+                        
+                        if text_items:
+                            response_text = '\n'.join(text_items)
+                        else:
+                            response_text = json.dumps(response_text, ensure_ascii=False)
+                    else:
+                        response_text = str(response_text)
+                except Exception as text_err:
+                    print(f"转换响应为字符串时出错: {str(text_err)}")
+                    response_text = "收到响应，但格式无法处理。"
+        
+        print(f"多模态响应: '{response_text[:100]}...' (长度: {len(response_text)})")
+        
+        # 记录消息到会话历史
+        current_time = datetime.now().isoformat()
+        
+        # 记录用户消息（带图片）
+        user_message = {
+            "role": "user",
+            "content": request.message,
+            "timestamp": current_time,
+            "image_url": file_path  # 存储图片路径
+        }
+        conversation_store[conversation_id]["messages"].append(user_message)
+        
+        # 记录助手响应
+        assistant_message = {
+            "role": "assistant",
+            "content": response_text,
+            "timestamp": datetime.now().isoformat()
+        }
+        conversation_store[conversation_id]["messages"].append(assistant_message)
+        
+        return {
+            "response": response_text,
+            "conversation_id": conversation_id
+        }
+    
+    except Exception as e:
+        print(f"多模态JSON请求错误: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": str(e)}
+        )
 
 if __name__ == "__main__":
     import uvicorn
