@@ -25,18 +25,33 @@ export interface MultiModalChatRequest {
   image_data?: string;  // Base64编码的图片数据
 }
 
+// 文生图请求类型
+export interface TextToImageRequest {
+  prompt: string;
+  negative_prompt?: string;
+  n?: number;
+  size?: string;
+}
+
+// 文生图响应类型
+export interface TextToImageResponse {
+  image_urls: string[];
+  conversation_id: string;
+}
+
 // 发送普通消息（非流式）
 export async function sendMessage(
   message: string, 
   conversationId?: string,
   chatHistory?: any[],
   useStream: boolean = false,
-  onTokenReceived?: (token: string) => void
-) {
+  onTokenReceived?: (token: string) => void,
+  onImageReceived?: (imageUrl: string) => void
+): Promise<{ content: string, conversationId: string, image_url?: string }> {
   console.log(`发送消息: '${message}', conversationId: ${conversationId || '新会话'}, 历史消息数: ${chatHistory?.length || 0}, 使用流式响应: ${useStream}`);
   
   if (useStream) {
-    return sendStreamMessage(message, conversationId, chatHistory, onTokenReceived);
+    return sendStreamMessage(message, conversationId, chatHistory, onTokenReceived, onImageReceived);
   }
   
   try {
@@ -62,10 +77,22 @@ export async function sendMessage(
     // 发送请求
     const response = await axios.post(url, request, { headers });
     
-    return {
+    // 构建返回对象
+    const result: { 
+      content: string, 
+      conversationId: string,
+      image_url?: string 
+    } = {
       content: response.data.response,
       conversationId: response.data.conversation_id
     };
+    
+    // 如果响应中包含图片URL
+    if (response.data.image_url) {
+      result.image_url = response.data.image_url;
+    }
+    
+    return result;
   } catch (error) {
     console.error(`发送消息失败:`, error);
     throw error;
@@ -120,7 +147,7 @@ export async function sendMultiModalJsonMessage(
   imageData: string,
   conversationId?: string,
   chatHistory?: any[]
-) {
+): Promise<{ content: string, conversationId: string, image_url?: string }> {
   try {
     console.log(`发送多模态JSON消息: '${message}', 图片数据长度: ${imageData.length}, conversationId: ${conversationId || '新会话'}, 历史消息数: ${chatHistory?.length || 0}`);
     
@@ -193,10 +220,22 @@ export async function sendMultiModalJsonMessage(
       content = '未收到有效响应。';
     }
     
-    return {
+    // 构建返回对象
+    const result: { 
+      content: string, 
+      conversationId: string,
+      image_url?: string 
+    } = {
       content: content,
-      conversationId: response.data.conversation_id || conversationId
+      conversationId: response.data.conversation_id || conversationId || ''
     };
+    
+    // 如果响应中包含图片URL
+    if (response.data.image_url) {
+      result.image_url = response.data.image_url;
+    }
+    
+    return result;
   } catch (error) {
     console.error(`发送多模态JSON消息失败:`, error);
     throw error;
@@ -208,8 +247,9 @@ export async function sendStreamMessage(
   message: string, 
   conversationId?: string,
   chatHistory?: any[],
-  onTokenReceived?: (token: string) => void
-): Promise<{ content: string, conversationId: string }> {
+  onTokenReceived?: (token: string) => void,
+  onImageReceived?: (imageUrl: string) => void
+): Promise<{ content: string, conversationId: string, image_url?: string }> {
   return new Promise((resolve, reject) => {
     try {
       console.log(`发送流式消息: '${message}', conversationId: ${conversationId || '新会话'}, 历史消息数: ${chatHistory?.length || 0}`);
@@ -255,7 +295,13 @@ export async function sendStreamMessage(
       // 处理接收到的消息
       eventSource.onmessage = (event: MessageEvent) => {
         try {
-          console.log('收到消息事件:', event.data);
+          console.log(`收到消息事件 (长度:${event.data?.length || 0}):`, event.data);
+          
+          // 检查事件数据是否为空
+          if (!event.data) {
+            console.warn('收到空消息事件，跳过处理');
+            return;
+          }
           
           // 字符串数据直接作为token
           const token = event.data;
@@ -263,7 +309,10 @@ export async function sendStreamMessage(
           
           // 调用回调函数更新UI
           if (onTokenReceived) {
+            console.log(`调用回调函数更新UI - token: ${token}`);
             onTokenReceived(token);
+          } else {
+            console.warn('未提供token回调函数，UI可能不会更新');
           }
         } catch (error) {
           console.error('处理消息事件失败:', error);
@@ -277,28 +326,37 @@ export async function sendStreamMessage(
           console.log('收到完成事件:', messageEvent.data);
           
           // 尝试解析数据
-          let data;
+          let data: { conversation_id?: string; image_url?: string } = {};
           try {
             data = JSON.parse(messageEvent.data);
+            console.log('解析完成事件数据成功:', data);
           } catch (parseError) {
-            console.log('完成事件JSON解析失败，使用空对象');
-            data = {};
+            console.warn('完成事件JSON解析失败，使用空对象:', parseError);
+            // 尝试记录原始数据以便调试
+            console.log('原始数据:', messageEvent.data);
           }
           
           if (data && data.conversation_id) {
             receivedConversationId = data.conversation_id;
+            console.log(`获取到会话ID: ${receivedConversationId}`);
           }
           
           console.log(`流式响应完成，会话ID: ${receivedConversationId}, 内容长度: ${receivedContent.length}`);
           
           // 关闭事件源
+          console.log('关闭EventSource连接');
           eventSource.close();
           
-          // 返回结果
-          resolve({
-            content: receivedContent,
-            conversationId: receivedConversationId
-          });
+          // 返回结果前确保所有内容已更新
+          setTimeout(() => {
+            // 返回结果
+            resolve({
+              content: receivedContent,
+              conversationId: receivedConversationId,
+              image_url: data.image_url
+            });
+            console.log('流式响应处理完成，Promise已解析');
+          }, 100);
         } catch (error) {
           console.error('处理完成事件失败:', error);
           eventSource.close();
@@ -324,4 +382,56 @@ export async function sendStreamMessage(
 export const getChatHistory = async (conversationId: string) => {
   const response = await axios.get(`${API_BASE_URL}/history/${conversationId}`);
   return response.data;
-}; 
+};
+
+// 文生图API调用
+export async function callTextToImage(
+  prompt: string,
+  options: {
+    negative_prompt?: string;
+    n?: number;
+    size?: string;
+    conversationId?: string;
+  } = {}
+): Promise<TextToImageResponse> {
+  try {
+    console.log(`发送文生图请求 - 提示词: '${prompt}', 会话ID: ${options.conversationId || '新会话'}`);
+    
+    // 构建请求对象
+    const request: TextToImageRequest = {
+      prompt: prompt
+    };
+    
+    // 添加可选参数
+    if (options.negative_prompt) request.negative_prompt = options.negative_prompt;
+    if (options.n) request.n = options.n;
+    if (options.size) request.size = options.size;
+    
+    // 设置请求头
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    
+    // 如果有会话ID，添加到URL参数
+    let url = `${API_BASE_URL}/text2image`;
+    if (options.conversationId) {
+      url += `?conversation_id=${options.conversationId}`;
+    }
+    
+    console.log(`发送文生图POST请求到: ${url}`);
+    
+    // 发送请求
+    const response = await axios.post(url, request, { headers });
+    
+    console.log('文生图响应:', response.data);
+    
+    // 返回结果
+    return {
+      image_urls: response.data.image_urls,
+      conversation_id: response.data.conversation_id
+    };
+  } catch (error) {
+    console.error(`文生图请求失败:`, error);
+    throw error;
+  }
+} 

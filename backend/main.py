@@ -16,6 +16,7 @@ import requests
 from typing import List, Dict, Any, Optional, Union
 from datetime import datetime
 from dotenv import load_dotenv
+from dashscope import ImageSynthesis
 
 # LangChain导入
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
@@ -863,7 +864,7 @@ async def call_dashscope_multimodal(text: str, image_path: str, history: List[Di
         response = MultiModalConversation.call(
             model='qwen-vl-plus',
             messages=messages,
-            stream=False,
+            stream=True,
             result_format='message',  # 使用消息格式
             temperature=0.7,
             max_tokens=1000,
@@ -1155,6 +1156,87 @@ async def chat_multimodal_json(
     
     except Exception as e:
         print(f"多模态JSON请求错误: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": str(e)}
+        )
+
+# 定义文生图请求模型类
+class TextToImageRequest(BaseModel):
+    prompt: str  # 图像生成提示词
+    negative_prompt: Optional[str] = None  # 负面提示词，可选
+    n: Optional[int] = 1  # 生成图片数量，默认1张
+    size: Optional[str] = "1024*1024"  # 图片尺寸，默认1024*1024
+
+# 文生图API端点
+@app.post("/api/text2image")
+async def text2image(
+    request: TextToImageRequest,
+    conversation_id: str = Depends(get_conversation_id)
+):
+    """生成图像的API端点"""
+    try:
+        print(f"收到文生图请求 - 提示词: '{request.prompt}', 会话ID: {conversation_id}")
+        
+        # 调用文生图API
+        rsp = ImageSynthesis.call(
+            api_key=os.getenv("DASHSCOPE_API_KEY"),
+            model="wanx2.1-t2i-turbo",  # 使用wanx2.1-t2i-turbo模型
+            prompt=request.prompt,
+            negative_prompt=request.negative_prompt,
+            n=request.n,
+            size=request.size
+        )
+        print('文生图API响应:', rsp)
+        
+        # 处理响应
+        if rsp.status_code == 200:
+            # 收集大模型返回的原始图片URL
+            original_image_urls = []
+            
+            for result in rsp.output.results:
+                # 直接使用大模型返回的URL
+                original_image_urls.append(result.url)
+                print(f"大模型生成的图片URL: {result.url}")
+            
+            # 记录到会话历史
+            current_time = datetime.now().isoformat()
+            
+            # 记录用户请求
+            user_message = {
+                "role": "user",
+                "content": f"请根据以下描述生成图片: {request.prompt}",
+                "timestamp": current_time
+            }
+            conversation_store[conversation_id]["messages"].append(user_message)
+            
+            # 记录系统响应
+            if original_image_urls:
+                assistant_message = {
+                    "role": "assistant",
+                    "content": f"已根据您的描述生成图片: {request.prompt}",
+                    "timestamp": datetime.now().isoformat(),
+                    "image_url": original_image_urls[0]  # 直接使用大模型返回的URL
+                }
+                conversation_store[conversation_id]["messages"].append(assistant_message)
+            
+            # 返回结果
+            return {
+                "image_urls": original_image_urls,
+                "conversation_id": conversation_id
+            }
+        else:
+            error_msg = f"文生图API调用失败: {rsp.status_code}, {rsp.message}"
+            print(error_msg)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content={"error": error_msg}
+            )
+            
+    except Exception as e:
+        print(f"文生图API请求错误: {str(e)}")
         import traceback
         traceback.print_exc()
         return JSONResponse(
